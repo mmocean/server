@@ -14,8 +14,9 @@
 #include<arpa/inet.h>
 #include<unistd.h>
 #include<fcntl.h>
-#include</usr/include/errno.h>
+#include<errno.h>
 #include<signal.h>
+#include<getopt.h>
 
 #define SIG_USER 14
 #define MAX_LEN 65535
@@ -34,7 +35,7 @@ SigUserProc(int no)
 }
 
 int 
-process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
+process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port )
 {
 	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
 	{
@@ -45,6 +46,34 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 	printf( "ESTABLISHED\n" );
 	printf( "listen addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
 
+	struct sockaddr_in client_addr;
+	
+	memset( &client_addr, 0, sizeof(client_addr) );
+	
+	int sockfd = 0;
+	
+	errno = 0;
+	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
+	{
+		printf( "socket error:%s\n", strerror(errno) );
+		return -1;
+	}
+	printf( "client socket success\n" );	
+
+	client_addr.sin_family = AF_INET;
+	//client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	client_addr.sin_port = htons( host_port );
+	
+	inet_pton( AF_INET, host_ip, &client_addr.sin_addr );
+
+	if( connect( sockfd, (sockaddr*)&client_addr, sizeof(client_addr) ) < 0 )
+	{
+		printf( "client connect error:%s\n", strerror(errno) );
+		close( sockfd );
+		return -1;			
+	}
+	printf( "connect success\n" );	
+
 	char buffer[MAX_LEN];
 	size_t length = 0;
 	fd_set readfd;
@@ -54,6 +83,7 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 	{
 		memset( buffer, 0, sizeof(buffer) );
 		FD_ZERO(&readfd);
+		FD_SET(sockfd ,&readfd);
 		FD_SET(sockfd_new ,&readfd);
 
 		tv.tv_sec = 2;
@@ -68,7 +98,7 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 			close( sockfd_new );		
 			return -1;			
 		} else if( FD_ISSET(sockfd_new, &readfd) ) {
-			printf( "receive message:\n" );
+			printf( "receive downstream message:\n" );
 			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
 			{
 				printf( "read error:%s\n", strerror(errno) );
@@ -82,9 +112,42 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 				printf( "buffer[%d] = %x\n", i, buffer[i] );
 			}
 			//if( strcmp( buffer, "hello" ) == 0 )
-			if( 1 )
+			if( length > 0 )
 			{
-				printf( "send message:\n" );
+				printf( "send message to upsteam:\n" );
+				char message[] = "world\n";
+				length = 0;
+				if( ( length = write( sockfd, message, strlen(message) ) ) == -1 )
+				{
+					printf( "write error:%s\n", strerror(errno) );
+					close( sockfd );		
+					return -1;			
+				}
+				printf( "write size = %d\n", length );
+			} else {
+				printf( "read error, close socket" );	
+				close( sockfd );		
+				close( sockfd_new );		
+				return -1;
+			}
+		} else if( FD_ISSET(sockfd, &readfd) ) {
+			printf( "receive upstream message:\n" );
+			if( ( length = read(sockfd, buffer, sizeof(buffer)) ) < 0 )
+			{
+				printf( "read error:%s\n", strerror(errno) );
+				close( sockfd );		
+				return -1;			
+			}
+			buffer[length] = '\0';
+			printf( "read size = %d\n", length );
+			for( int i = 0; i<length; i++ )
+			{
+				printf( "buffer[%d] = %x\n", i, buffer[i] );
+			}
+			//if( strcmp( buffer, "hello" ) == 0 )
+			if( length > 0 )
+			{
+				printf( "send message to downsteam:\n" );
 				char message[] = "world\n";
 				length = 0;
 				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
@@ -94,6 +157,11 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 					return -1;			
 				}
 				printf( "write size = %d\n", length );
+			} else {
+				printf( "read error, close socket" );	
+				close( sockfd );		
+				close( sockfd_new );		
+				return -1;
 			}
 		} else {
 			printf( "listen interval:%d s\n", timeout );
@@ -107,7 +175,7 @@ process( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 }
 
 int 
-server( const int &port )
+server( int listen_port, const char* host_ip, int host_port )
 {
 	struct sockaddr_in server_addr;
 	
@@ -118,23 +186,23 @@ server( const int &port )
 	errno = 0;
 	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
 	{
-		printf( "socket error:%s\n", strerror(errno) );
+		printf( "server socket error:%s\n", strerror(errno) );
 		return -1;
 	}
-	printf( "socket success\n" );	
+	printf( "server socket success\n" );	
 
 	int reuse = 1;
 	if( setsockopt( sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse, (socklen_t)sizeof(int) ) < 0 )
 	{
-		printf( "setsockopt error:%s\n", strerror(errno) );
+		printf( "server setsockopt error:%s\n", strerror(errno) );
 		close( sockfd );
 		return -1;			
 	}
-	printf( "setsockopt success\n" );	
+	printf( "server setsockopt success\n" );	
 
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	server_addr.sin_port = htons( port );
+	server_addr.sin_port = htons( listen_port );
 
 	if( bind( sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr) ) == - 1 )
 	{
@@ -142,19 +210,21 @@ server( const int &port )
 		close( sockfd );
 		return -1;			
 	}
-	printf( "bind success\n" );	
+	printf( "server bind success\n" );	
 
 	if( listen( sockfd, 5) == -1 )
 	{
-		printf( "listen error:%s\n", strerror(errno) );
+		printf( "server listen error:%s\n", strerror(errno) );
 		close( sockfd );
 		return -1;			
 	}		
-	printf( "listen success port = %d\n", port );	
+	printf( "server listen success port = %d\n", listen_port );	
 	
 	parent = getpid();
 	int status;
 
+	printf( "server bind success\n" );	
+	printf( "server bind success\n" );	
 	while(1) 
 	{
 		int sockfd_new = 0;
@@ -203,7 +273,7 @@ server( const int &port )
 				close( sockfd );
 				return -1;
 			} else if( pid == 0 ){
-				if( process( sockfd_new, &client_addr, &clientsize ) < 0 )
+				if( process( sockfd_new, &client_addr, &clientsize, host_ip, host_port ) < 0 )
 				{
 					printf( "process error:%s\n", strerror(errno) );
 					return -1;
@@ -230,9 +300,40 @@ main( int argc, char **argv )
 {
 	signal(SIGCHLD, SigUserProc);
 
-	int port = 12345;
-	server( port );
+	int port = 0;
+	char *host_ip = NULL;
+	int host_port = 0;
+	char c = 0;
+
+	if( argc < 7 )
+	{
+		printf( "usage:./server -l 12306 -s 127.0.0.1 -p 12307\n" );
+		return -1;
+	}
+	while( (c = getopt( argc, argv, "l:s:p:" )) > 0 )
+	{
+		switch( c )
+		{
+			case ('l'):
+				port = atoi( optarg );
+				break;
+			case ('s'):
+				host_ip = optarg;
+				break;
+			case ('p'):
+				host_port = atoi( optarg );
+				break;
+			default:
+				printf( "usage:./server -l 12306 -s 127.0.0.1 -p 12307\n" );
+				return -1;
+		}
+	}
+
+	printf( "listen_port:%d\nhost_ip:%s\nhost_port:%d\n", port, host_ip, host_port );
+
+	server( port, host_ip, host_port );
 	
 	printf( "server close\n" );
+
 	return 0;
-}
+ }
