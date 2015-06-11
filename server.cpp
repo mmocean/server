@@ -20,10 +20,15 @@
 #include<netdb.h>
 #include<netinet/in.h>
 
-#define SIG_USER 14
-#define MAX_LEN 65535
 
+#define SIG_USER 14
+#define SO_BUF_LEN_MAX 65536
+#define HOST_IP_LEN_MAX 16
 #define HTTP_PROXY
+
+#define SERVER_DEBUG(...)\
+printf("[DEBUG %d] [%s:%d] ", getpid(), __FILE__, __LINE__ );\
+printf( __VA_ARGS__ );\
 
 extern int errno;
 extern int h_errno;
@@ -31,13 +36,34 @@ extern int h_errno;
 pid_t parent;
 
 
-#define SERVER_DEBUG(...)\
-printf("[DEBUG] [%s:%d] ", __FILE__, __LINE__ );\
-printf( __VA_ARGS__ );\
 
+void 
+SigUserProc(int no);
+
+int 
+process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen );
 
 int 
 parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, size_t host_ip_len );
+
+size_t
+read_wrapper( int fd, char *buf, size_t count );
+
+size_t
+write_wrapper( int fd, const char *buf, size_t count );
+
+int 
+server( int listen_port, const char* host_ip, int host_port );
+
+int 
+process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen );
+
+int 
+process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port );
+
+
+
+
 
 
 void 
@@ -52,138 +78,6 @@ SigUserProc(int no)
 
 
 int 
-process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port )
-{
-	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
-	{
-		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
-		return -1;			
-	}
-
-	SERVER_DEBUG( "ESTABLISHED\n" );
-	SERVER_DEBUG( "listen addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
-
-	struct sockaddr_in client_addr;
-	
-	memset( &client_addr, 0, sizeof(client_addr) );
-	
-	int sockfd = 0;
-	
-	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
-	{
-		SERVER_DEBUG( "socket error:%s\n", strerror(errno) );
-		return -1;
-	}
-	SERVER_DEBUG( "client socket success\n" );	
-
-	client_addr.sin_family = AF_INET;
-	//client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	client_addr.sin_port = htons( host_port );
-	
-	inet_pton( AF_INET, host_ip, &client_addr.sin_addr );
-
-	if( connect( sockfd, (sockaddr*)&client_addr, sizeof(client_addr) ) < 0 )
-	{
-		SERVER_DEBUG( "client connect error:%s\n", strerror(errno) );
-		close( sockfd );
-		return -1;			
-	}
-	SERVER_DEBUG( "connect success\n" );	
-
-	char buffer[MAX_LEN];
-	size_t length = 0;
-	fd_set readfd;
-	struct timeval tv;
-
-	while(1)
-	{
-		memset( buffer, 0, sizeof(buffer) );
-		FD_ZERO(&readfd);
-		FD_SET(sockfd ,&readfd);
-		FD_SET(sockfd_new ,&readfd);
-
-		tv.tv_sec = 60;
-		tv.tv_usec = 0;
-		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
-	
-		int nRet = 0;
-
-		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
-		{
-			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
-			return -1;			
-		} else if( FD_ISSET(sockfd_new, &readfd) ) {
-			SERVER_DEBUG( "receive downstream message:\n" );
-			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
-			{
-				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
-				return -1;			
-			}
-			buffer[length] = '\0';
-			SERVER_DEBUG( "read size = %d\n", length );
-			for( int i = 0; i<length; i++ )
-			{
-				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
-			}
-			if( length > 0 )
-			{
-				SERVER_DEBUG( "send message to upsteam:\n" );
-				char message[] = "world\n";
-				length = 0;
-				if( ( length = write( sockfd, message, strlen(message) ) ) == -1 )
-				{
-					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
-					close( sockfd );		
-					return -1;			
-				}
-				SERVER_DEBUG( "write size = %d\n", length );
-			} else {
-				SERVER_DEBUG( "read error, close socket\n" );	
-				close( sockfd );		
-				return -1;
-			}
-		} else if( FD_ISSET(sockfd, &readfd) ) {
-			SERVER_DEBUG( "receive upstream message:\n" );
-			if( ( length = read(sockfd, buffer, sizeof(buffer)) ) < 0 )
-			{
-				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
-				close( sockfd );		
-				return -1;			
-			}
-			buffer[length] = '\0';
-			SERVER_DEBUG( "read size = %d\n", length );
-			for( int i = 0; i<length; i++ )
-			{
-				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
-			}
-			if( length > 0 )
-			{
-				SERVER_DEBUG( "send message to downsteam:\n" );
-				char message[] = "world\n";
-				length = 0;
-				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
-				{
-					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
-					return -1;			
-				}
-				SERVER_DEBUG( "write size = %d\n", length );
-			} else {
-				SERVER_DEBUG( "read error, close socket\n" );	
-				close( sockfd );		
-				return -1;
-			}
-		} else {
-			//SERVER_DEBUG( "listen interval:%d s\n", timeout );
-			continue;
-		}
-	}
-
-	kill( parent, SIGCHLD );
-	return 0;
-}
-
-
-int 
 process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 {
 	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
@@ -192,8 +86,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 		return -1;			
 	}
 
-	SERVER_DEBUG( "ESTABLISHED\n" );
-	SERVER_DEBUG( "listen addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
+	SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
 
 	struct sockaddr_in client_addr;
 	memset( &client_addr, 0, sizeof(client_addr) );
@@ -211,7 +104,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 	client_addr.sin_family = AF_INET;
 	client_addr.sin_port = htons(host_port);
 		
-	char buffer[MAX_LEN];
+	char buffer[SO_BUF_LEN_MAX];
 	size_t length = 0;
 	fd_set readfd;
 	struct timeval tv;
@@ -230,11 +123,15 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 
 		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
 		{
+			if( EINTR == errno )
+			{
+				continue;
+			}
 			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
 			return -1;			
 		} else if( FD_ISSET(sockfd_new, &readfd) ) {
 			SERVER_DEBUG( "receive downstream message:\n" );
-			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
+			if( ( length = read_wrapper(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
 			{
 				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
 				return -1;			
@@ -246,7 +143,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 				//to do
 				buffer[length] = '\0';
 				//parse http_data
-				char host_ip[16] = {0};
+				char host_ip[HOST_IP_LEN_MAX] = {0};
 				memset( host_ip, 0, sizeof(host_ip) );
 				if( parse_http_data( buffer, length, host_ip, sizeof(host_ip) ) < 0 )
 				{
@@ -263,7 +160,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 					} else {
 						SERVER_DEBUG( "connect success %s:%d \n", host_ip, host_port );
 						SERVER_DEBUG( "send message to upsteam:\n" );
-						if( ( length = write( sockfd, buffer, length ) ) == -1 )
+						if( ( length = write_wrapper( sockfd, buffer, length ) ) == -1 )
 						{
 							SERVER_DEBUG( "write error:%s\n", strerror(errno) );
 							close( sockfd );		
@@ -281,11 +178,15 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 
 						if( ( nRet = select(sockfd+1, &readfd, NULL, NULL, &tv ) ) < 0 )
 						{
+							if( EINTR == errno )
+							{
+								continue;
+							}
 							SERVER_DEBUG( "select error:%s\n", strerror(errno) );
 							return -1;			
 						} else if( FD_ISSET(sockfd, &readfd) ) {
 							SERVER_DEBUG( "receive upstream message:\n" );
-							if( ( length = read(sockfd, buffer, sizeof(buffer)) ) < 0 )
+							if( ( length = read_wrapper(sockfd, buffer, sizeof(buffer)) ) < 0 )
 							{
 								SERVER_DEBUG( "read error:%s\n", strerror(errno) );
 								return -1;			
@@ -294,7 +195,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 							if( length > 0 )
 							{
 								SERVER_DEBUG( "send message to downsteam:\n" );
-								if( ( length = write( sockfd_new, buffer, length ) ) == -1 )
+								if( ( length = write_wrapper( sockfd_new, buffer, length ) ) == -1 )
 								{
 									SERVER_DEBUG( "write error:%s\n", strerror(errno) );
 									close( sockfd_new );		
@@ -307,7 +208,6 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 								break;
 							}
 						} else {						
-							//SERVER_DEBUG( "listen interval:%d s\n", timeout );
 							close( sockfd );
 							break;
 						}
@@ -319,13 +219,61 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 				return -1;
 			}
 		} else {
-			//SERVER_DEBUG( "listen interval:%d s\n", timeout );
 			continue;
 		}
 	}
 
 	kill( parent, SIGCHLD );
 	return 0;
+}
+
+
+size_t
+read_wrapper( int fd, char *buf, size_t count )
+{
+	size_t c = 0;
+	while(1)
+	{
+		size_t length = read( fd, buf+c, count-c );
+		if( -1 == length )
+		{
+			if( EINTR == errno )
+			{
+				SERVER_DEBUG( "ignore EINTR\n" );
+				continue;
+			}
+			break;
+		} else if( 0 < length ){
+			c += length;
+		} else {
+			break;
+		}
+	}
+	return c;
+}
+
+
+size_t
+write_wrapper( int fd, const char *buf, size_t count )
+{
+	size_t c = 0;
+	while(1)
+	{
+		size_t length = write( fd, buf+c, count-c );
+		if( 0 > length )
+		{
+			if( EINTR == errno )
+			{
+				continue;
+			}
+			break;
+		} else if( 0 < length ){
+			c += length;
+		} else {
+			break;
+		}
+	}
+	return c;
 }
 
 
@@ -347,7 +295,7 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 	memset( host, 0, sizeof(host) );
 	int index = 0;
 	do {
-		char line[128] = {0};
+		char line[256] = {0};
 		memset( line, 0, sizeof(line) );
 		int count = sscanf( http_data+index, "%[^\n]%*c", line );	
 		if( count > 0 )
@@ -372,7 +320,7 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 				strncpy( host, p, sizeof(host) );
 				size_t len = strlen(host);
 				SERVER_DEBUG( "len = %d\n", len )
-				while( len > 1 &&'\r' == host[len-1] || '\n' == host[len-1] )
+				while( len > 1 && '\r' == host[len-1] || '\n' == host[len-1] )
 				{
 					host[len-1] = '\0';
 					len = strlen(host);
@@ -406,75 +354,6 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 		return -1;
 	}
 
-	return 0;
-}
-
-
-int 
-process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
-{
-	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
-	{
-		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
-		return -1;			
-	}
-
-	SERVER_DEBUG( "ESTABLISHED\n" );
-	SERVER_DEBUG( "listen addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
-
-	char buffer[MAX_LEN];
-	size_t length = 0;
-	fd_set readfd;
-	struct timeval tv;
-
-	while(1)
-	{
-		memset( buffer, 0, sizeof(buffer) );
-		FD_ZERO(&readfd);
-		FD_SET(sockfd_new ,&readfd);
-
-		tv.tv_sec = 60;
-		tv.tv_usec = 0;
-		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
-	
-		int nRet = 0;
-
-		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
-		{
-			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
-			return -1;			
-		} else if( FD_ISSET(sockfd_new, &readfd) ) {
-			SERVER_DEBUG( "receive message:\n" );
-			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
-			{
-				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
-				return -1;			
-			}
-			buffer[length] = '\0';
-			SERVER_DEBUG( "read size = %d\n", length );
-			for( int i = 0; i<length; i++ )
-			{
-				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
-			}
-			if( 1 )
-			{
-				SERVER_DEBUG( "send message:\n" );
-				char message[] = "world\n";
-				length = 0;
-				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
-				{
-					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
-					return -1;			
-				}
-				SERVER_DEBUG( "write size = %d\n", length );
-			}
-		} else {
-			//SERVER_DEBUG( "listen interval:%d s\n", timeout );
-			continue;
-		}
-	}
-
-	kill( parent, SIGCHLD );
 	return 0;
 }
 
@@ -616,6 +495,211 @@ server( int listen_port, const char* host_ip, int host_port )
 
 
 int 
+process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
+{
+	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
+	{
+		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
+		return -1;			
+	}
+
+	SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
+
+	char buffer[SO_BUF_LEN_MAX];
+	size_t length = 0;
+	fd_set readfd;
+	struct timeval tv;
+
+	while(1)
+	{
+		memset( buffer, 0, sizeof(buffer) );
+		FD_ZERO(&readfd);
+		FD_SET(sockfd_new ,&readfd);
+
+		tv.tv_sec = 60;
+		tv.tv_usec = 0;
+		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
+	
+		int nRet = 0;
+
+		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+		{
+			if( EINTR == errno )
+			{
+				continue;
+			}
+			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
+			return -1;			
+		} else if( FD_ISSET(sockfd_new, &readfd) ) {
+			SERVER_DEBUG( "receive message:\n" );
+			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
+			{
+				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
+				return -1;			
+			}
+			buffer[length] = '\0';
+			SERVER_DEBUG( "read size = %d\n", length );
+			for( int i = 0; i<length; i++ )
+			{
+				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
+			}
+			if( 1 )
+			{
+				SERVER_DEBUG( "send message:\n" );
+				char message[] = "world\n";
+				length = 0;
+				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
+				{
+					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
+					return -1;			
+				}
+				SERVER_DEBUG( "write size = %d\n", length );
+			}
+		} else {
+			continue;
+		}
+	}
+
+	kill( parent, SIGCHLD );
+	return 0;
+}
+
+
+int 
+process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port )
+{
+	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
+	{
+		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
+		return -1;			
+	}
+
+	SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
+
+	struct sockaddr_in client_addr;
+	
+	memset( &client_addr, 0, sizeof(client_addr) );
+	
+	int sockfd = 0;
+	
+	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
+	{
+		SERVER_DEBUG( "socket error:%s\n", strerror(errno) );
+		return -1;
+	}
+	SERVER_DEBUG( "client socket success\n" );	
+
+	client_addr.sin_family = AF_INET;
+	//client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	client_addr.sin_port = htons( host_port );
+	
+	inet_pton( AF_INET, host_ip, &client_addr.sin_addr );
+
+	if( connect( sockfd, (sockaddr*)&client_addr, sizeof(client_addr) ) < 0 )
+	{
+		SERVER_DEBUG( "client connect error:%s\n", strerror(errno) );
+		close( sockfd );
+		return -1;			
+	}
+	SERVER_DEBUG( "connect success\n" );	
+
+	char buffer[SO_BUF_LEN_MAX];
+	size_t length = 0;
+	fd_set readfd;
+	struct timeval tv;
+
+	while(1)
+	{
+		memset( buffer, 0, sizeof(buffer) );
+		FD_ZERO(&readfd);
+		FD_SET(sockfd ,&readfd);
+		FD_SET(sockfd_new ,&readfd);
+
+		tv.tv_sec = 60;
+		tv.tv_usec = 0;
+		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
+	
+		int nRet = 0;
+
+		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+		{
+			if( EINTR == errno )
+			{
+				continue;
+			}
+			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
+			return -1;			
+		} else if( FD_ISSET(sockfd_new, &readfd) ) {
+			SERVER_DEBUG( "receive downstream message:\n" );
+			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
+			{
+				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
+				return -1;			
+			}
+			buffer[length] = '\0';
+			SERVER_DEBUG( "read size = %d\n", length );
+			for( int i = 0; i<length; i++ )
+			{
+				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
+			}
+			if( length > 0 )
+			{
+				SERVER_DEBUG( "send message to upsteam:\n" );
+				char message[] = "world\n";
+				length = 0;
+				if( ( length = write( sockfd, message, strlen(message) ) ) == -1 )
+				{
+					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
+					close( sockfd );		
+					return -1;			
+				}
+				SERVER_DEBUG( "write size = %d\n", length );
+			} else {
+				SERVER_DEBUG( "read error, close socket\n" );	
+				close( sockfd );		
+				return -1;
+			}
+		} else if( FD_ISSET(sockfd, &readfd) ) {
+			SERVER_DEBUG( "receive upstream message:\n" );
+			if( ( length = read(sockfd, buffer, sizeof(buffer)) ) < 0 )
+			{
+				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
+				close( sockfd );		
+				return -1;			
+			}
+			buffer[length] = '\0';
+			SERVER_DEBUG( "read size = %d\n", length );
+			for( int i = 0; i<length; i++ )
+			{
+				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
+			}
+			if( length > 0 )
+			{
+				SERVER_DEBUG( "send message to downsteam:\n" );
+				char message[] = "world\n";
+				length = 0;
+				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
+				{
+					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
+					return -1;			
+				}
+				SERVER_DEBUG( "write size = %d\n", length );
+			} else {
+				SERVER_DEBUG( "read error, close socket\n" );	
+				close( sockfd );		
+				return -1;
+			}
+		} else {
+			continue;
+		}
+	}
+
+	kill( parent, SIGCHLD );
+	return 0;
+}
+
+
+int 
 main( int argc, char **argv )
 {
 	signal(SIGCHLD, SigUserProc);
@@ -664,6 +748,6 @@ main( int argc, char **argv )
 	SERVER_DEBUG( "server close\n" );
 
 	return 0;
- }
+}
 
 
