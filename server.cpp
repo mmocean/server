@@ -8,6 +8,8 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
+#include<time.h>
+#include<assert.h>
 #include<sys/socket.h>
 #include<sys/types.h>
 #include<sys/wait.h>
@@ -20,14 +22,28 @@
 #include<netdb.h>
 #include<netinet/in.h>
 
-
-#define SIG_USER 14
-#define SO_BUF_LEN_MAX 65536
-#define HOST_IP_LEN_MAX 16
 #define HTTP_PROXY
 
+#define SIG_USER 14
+
+#define HOST_IP_LEN_MAX 16
+#define HOST_PORT_DEFAULT 80
+#define HOST_NAME_LEN_MAX 128
+#define HTTP_LINE_LEN_MAX 256
+
+#define TIME_OUT_DEFAULT 60
+#define TIME_STRING_LEN_MAX 32
+
+#define BACK_LOG_DEFAULT 5
+
+#define SO_BUF_LEN_MAX 65536
+#define SO_SEND_BUF_MAX 8192
+#define SO_RECV_BUF_MAX 8192
+
+
+//printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
+
 #define SERVER_DEBUG(...)\
-printf("[DEBUG %d] [%s:%d] ", getpid(), __FILE__, __LINE__ );\
 printf( __VA_ARGS__ );\
 
 extern int errno;
@@ -53,6 +69,9 @@ size_t
 write_wrapper( int fd, const char *buf, size_t count );
 
 int 
+setsockopt_wrapper( int sockfd );
+
+int 
 server( int listen_port, const char* host_ip, int host_port );
 
 int 
@@ -61,7 +80,7 @@ process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen );
 int 
 process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port );
 
-
+const char* get_time_string( void );
 
 
 
@@ -80,6 +99,9 @@ SigUserProc(int no)
 int 
 process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 {
+	assert( NULL != addr );
+	assert( NULL != addrlen );
+
 	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
 	{
 		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
@@ -100,10 +122,17 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 	}
 	SERVER_DEBUG( "client socket success\n" );	
 
-	const int host_port = 80;
+	const int host_port = HOST_PORT_DEFAULT;
 	client_addr.sin_family = AF_INET;
 	client_addr.sin_port = htons(host_port);
-		
+
+	if( setsockopt_wrapper( sockfd ) < 0 )
+	{
+		SERVER_DEBUG( "setsockopt_wrapper error:%s\n", strerror(errno) );
+		close( sockfd );
+		return -1;
+	}
+
 	char buffer[SO_BUF_LEN_MAX];
 	size_t length = 0;
 	fd_set readfd;
@@ -115,7 +144,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 		FD_ZERO(&readfd);
 		FD_SET(sockfd_new ,&readfd);
 
-		tv.tv_sec = 60;
+		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
 		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
 	
@@ -171,7 +200,7 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 						FD_ZERO(&readfd);
 						FD_SET(sockfd ,&readfd);
 
-						tv.tv_sec = 60;
+						tv.tv_sec = TIME_OUT_DEFAULT;
 						tv.tv_usec = 0;
 						
 						int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
@@ -231,10 +260,13 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 size_t
 read_wrapper( int fd, char *buf, size_t count )
 {
+	assert( NULL != buf );
+
 	size_t c = 0;
 	while(1)
 	{
 		size_t length = read( fd, buf+c, count-c );
+		SERVER_DEBUG( "read length:%d\n", length );
 		if( -1 == length )
 		{
 			if( EINTR == errno )
@@ -256,6 +288,8 @@ read_wrapper( int fd, char *buf, size_t count )
 size_t
 write_wrapper( int fd, const char *buf, size_t count )
 {
+	assert( NULL != buf );
+
 	size_t c = 0;
 	while(1)
 	{
@@ -276,10 +310,43 @@ write_wrapper( int fd, const char *buf, size_t count )
 	return c;
 }
 
+int 
+setsockopt_wrapper( int sockfd )
+{
+	int reuse = 1;
+	if( setsockopt( sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse, (socklen_t)sizeof(int) ) < 0 )
+	{
+		SERVER_DEBUG( "setsockopt SO_REUSEADDR error:%s\n", strerror(errno) );
+		return -1;			
+	}
+	SERVER_DEBUG( "setsockopt SO_REUSEADDR success\n" );	
+
+	int sndbuf = SO_SEND_BUF_MAX;
+	if( setsockopt( sockfd, SOL_SOCKET, SO_SNDBUF, (const void *)&sndbuf, (socklen_t)sizeof(int) ) < 0 )
+	{
+		SERVER_DEBUG( "setsockopt SO_SNDBUF error:%s\n", strerror(errno) );
+		return -1;			
+	}
+	SERVER_DEBUG( "setsockopt SO_SNDBUF success\n" );	
+
+	int rcvbuf = SO_RECV_BUF_MAX;
+	if( setsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, (const void *)&rcvbuf, (socklen_t)sizeof(int) ) < 0 )
+	{
+		SERVER_DEBUG( "setsockopt SO_RCVBUF error:%s\n", strerror(errno) );
+		return -1;			
+	}
+	SERVER_DEBUG( "setsockopt SO_RCVBUF success\n" );	
+
+	return 0;
+}
+
 
 int 
 parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, size_t host_ip_len )
 {
+	assert( NULL != http_data );
+	assert( NULL != host_ip );
+
 	SERVER_DEBUG( "#########dump http###########\n" );
 	SERVER_DEBUG( "\n%s", http_data );
 	SERVER_DEBUG( "#########dump http###########\n" );
@@ -291,11 +358,11 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 	}
 
 	//parse host value
-	char host[128] = {0};
+	char host[HOST_NAME_LEN_MAX] = {0};
 	memset( host, 0, sizeof(host) );
 	int index = 0;
 	do {
-		char line[256] = {0};
+		char line[HTTP_LINE_LEN_MAX] = {0};
 		memset( line, 0, sizeof(line) );
 		int count = sscanf( http_data+index, "%[^\n]%*c", line );	
 		if( count > 0 )
@@ -358,11 +425,27 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 }
 
 
+const char* get_time_string( void )
+{
+	static char strtime[TIME_STRING_LEN_MAX] = {0};
+	memset( strtime, 0, sizeof(strtime) );
+	
+	time_t tt = time( NULL );
+	const char* p = asctime( localtime(&tt) );
+	
+	strncpy( strtime, p, strlen(p)-1 );
+	
+	return strtime;
+}
+
+	
 int 
 server( int listen_port, const char* host_ip, int host_port )
 {
-	struct sockaddr_in server_addr;
-	
+	#if !defined(HTTP_PROXY)
+	assert( NULL != host_ip );
+	#endif
+	struct sockaddr_in server_addr;	
 	memset( &server_addr, 0, sizeof(server_addr) );
 	
 	int sockfd = 0;
@@ -374,14 +457,12 @@ server( int listen_port, const char* host_ip, int host_port )
 	}
 	SERVER_DEBUG( "server socket success\n" );	
 
-	int reuse = 1;
-	if( setsockopt( sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse, (socklen_t)sizeof(int) ) < 0 )
+	if( setsockopt_wrapper( sockfd ) < 0 )
 	{
-		SERVER_DEBUG( "server setsockopt error:%s\n", strerror(errno) );
+		SERVER_DEBUG( "setsockopt_wrapper error:%s\n", strerror(errno) );
 		close( sockfd );
-		return -1;			
+		return -1;
 	}
-	SERVER_DEBUG( "server setsockopt success\n" );	
 
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -395,7 +476,7 @@ server( int listen_port, const char* host_ip, int host_port )
 	}
 	SERVER_DEBUG( "server bind success\n" );	
 
-	if( listen( sockfd, 5 ) == -1 )
+	if( listen( sockfd, BACK_LOG_DEFAULT ) == -1 )
 	{
 		SERVER_DEBUG( "server listen error:%s\n", strerror(errno) );
 		close( sockfd );
@@ -484,7 +565,7 @@ server( int listen_port, const char* host_ip, int host_port )
 			SERVER_DEBUG( "waitpid\n" );
 			close( sockfd_new );	
 			//waitpid( child, &status, 0 );
-			waitpid( -1, &status, WNOHANG );
+			//waitpid( 0, &status, WNOHANG );
 		}
 	}
 	
@@ -497,6 +578,9 @@ server( int listen_port, const char* host_ip, int host_port )
 int 
 process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 {
+	assert( NULL != addr );
+	assert( NULL != addrlen );
+	
 	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
 	{
 		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
@@ -516,7 +600,7 @@ process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 		FD_ZERO(&readfd);
 		FD_SET(sockfd_new ,&readfd);
 
-		tv.tv_sec = 60;
+		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
 		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
 	
@@ -568,6 +652,10 @@ process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 int 
 process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, const char* host_ip, int host_port )
 {
+	assert( NULL != addr );
+	assert( NULL != addrlen );
+	assert( NULL != host_ip );
+	
 	if( getpeername( sockfd_new, (struct sockaddr *)addr, addrlen ) == -1 )
 	{
 		SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
@@ -615,7 +703,7 @@ process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, con
 		FD_SET(sockfd ,&readfd);
 		FD_SET(sockfd_new ,&readfd);
 
-		tv.tv_sec = 60;
+		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
 		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
 	
