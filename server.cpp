@@ -23,6 +23,7 @@
 #include<netinet/in.h>
 
 #define HTTP_PROXY
+//#define SERVER
 
 #define SIG_USER 14
 
@@ -36,14 +37,13 @@
 
 #define BACK_LOG_DEFAULT 5
 
-#define SO_BUF_LEN_MAX 65536
+#define SO_BUF_LEN_MAX 32768
 #define SO_SEND_BUF_MAX 8192
 #define SO_RECV_BUF_MAX 8192
 
 
-//printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
-
 #define SERVER_DEBUG(...)\
+printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
 printf( __VA_ARGS__ );\
 
 extern int errno;
@@ -62,11 +62,14 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 int 
 parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, size_t host_ip_len );
 
-size_t
+ssize_t
 read_wrapper( int fd, char *buf, size_t count );
 
-size_t
+ssize_t
 write_wrapper( int fd, const char *buf, size_t count );
+
+int 
+dada_exchange( int sockfd_dest, int sockfd_src, char* buf, size_t count );
 
 int 
 setsockopt_wrapper( int sockfd );
@@ -89,9 +92,7 @@ void
 SigUserProc(int no)
 {
 	int status;
-	SERVER_DEBUG( "SigUserProc\n" );
-	//wait(&status);	
-	//waitpid( -1, &status, WNOHANG );
+	SERVER_DEBUG( "SigUserProc kill\n" );
 	waitpid( 0, &status, WNOHANG );
 }
 
@@ -110,47 +111,17 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 
 	SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(addr->sin_addr), addr->sin_port );
 
-	struct sockaddr_in client_addr;
-	memset( &client_addr, 0, sizeof(client_addr) );
-	
-	int sockfd = 0;
-	
-	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
-	{
-		SERVER_DEBUG( "socket error:%s\n", strerror(errno) );
-		return -1;
-	}
-	SERVER_DEBUG( "client socket success\n" );	
-
-	const int host_port = HOST_PORT_DEFAULT;
-	client_addr.sin_family = AF_INET;
-	client_addr.sin_port = htons(host_port);
-
-	if( setsockopt_wrapper( sockfd ) < 0 )
-	{
-		SERVER_DEBUG( "setsockopt_wrapper error:%s\n", strerror(errno) );
-		close( sockfd );
-		return -1;
-	}
-
-	char buffer[SO_BUF_LEN_MAX];
-	size_t length = 0;
-	fd_set readfd;
-	struct timeval tv;
-
 	while(1)
 	{
-		memset( buffer, 0, sizeof(buffer) );
+		fd_set readfd;
 		FD_ZERO(&readfd);
-		FD_SET(sockfd_new ,&readfd);
+		FD_SET(sockfd_new, &readfd);
 
+		struct timeval tv;
 		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
-		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
-	
 		int nRet = 0;
-
-		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv) ) < 0 )
 		{
 			if( EINTR == errno )
 			{
@@ -159,7 +130,10 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 			SERVER_DEBUG( "select error:%s\n", strerror(errno) );
 			return -1;			
 		} else if( FD_ISSET(sockfd_new, &readfd) ) {
+			char buffer[SO_BUF_LEN_MAX];
 			SERVER_DEBUG( "receive downstream message:\n" );
+
+			ssize_t length = 0;
 			if( ( length = read_wrapper(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
 			{
 				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
@@ -173,13 +147,32 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 				buffer[length] = '\0';
 				//parse http_data
 				char host_ip[HOST_IP_LEN_MAX] = {0};
-				memset( host_ip, 0, sizeof(host_ip) );
 				if( parse_http_data( buffer, length, host_ip, sizeof(host_ip) ) < 0 )
 				{
 					SERVER_DEBUG( "parse_http_data error\n" );
-					close( sockfd );
 					return -1;			
 				} else {
+					struct sockaddr_in client_addr;
+					memset( &client_addr, 0, sizeof(client_addr) );
+					int sockfd = 0;
+					if( (sockfd = socket(AF_INET,SOCK_STREAM,0) ) == -1 )
+					{
+						SERVER_DEBUG( "socket error:%s\n", strerror(errno) );
+						return -1;
+					}
+					SERVER_DEBUG( "client socket successfully\n" );	
+
+					const int host_port = HOST_PORT_DEFAULT;
+					client_addr.sin_family = AF_INET;
+					client_addr.sin_port = htons(host_port);
+
+					if( setsockopt_wrapper( sockfd ) < 0 )
+					{
+						SERVER_DEBUG( "setsockopt_wrapper error:%s\n", strerror(errno) );
+						close( sockfd );
+						return -1;
+					}
+
 					inet_pton( AF_INET, host_ip, &client_addr.sin_addr );
 					if( connect( sockfd, (sockaddr*)&client_addr, sizeof(client_addr) ) < 0 )
 					{
@@ -187,7 +180,19 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 						close( sockfd );
 						return -1;			
 					} else {
-						SERVER_DEBUG( "connect success %s:%d \n", host_ip, host_port );
+						SERVER_DEBUG( "connect successfully %s:%d \n", host_ip, host_port );
+						
+						int flag = 0;
+						if( flag = fcntl( sockfd_new, F_GETFL,0 ) != -1 )
+						{
+							if( fcntl( sockfd_new, F_SETFL, flag|O_NONBLOCK ) < 0 )
+							{
+								SERVER_DEBUG( "fcntl error:%s\n", strerror(errno) );
+								return -1;				
+							}
+							SERVER_DEBUG( "fcntl O_NONBLOCK successfully\n" );	
+						}
+						
 						SERVER_DEBUG( "send message to upsteam:\n" );
 						if( ( length = write_wrapper( sockfd, buffer, length ) ) == -1 )
 						{
@@ -196,59 +201,55 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 							return -1;			
 						}
 						SERVER_DEBUG( "write size = %d\n", length );		   
-						
-						FD_ZERO(&readfd);
-						FD_SET(sockfd ,&readfd);
 
-						tv.tv_sec = TIME_OUT_DEFAULT;
-						tv.tv_usec = 0;
-						
-						int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
-
-						if( ( nRet = select(sockfd+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+						while(1)
 						{
-							if( EINTR == errno )
+							int count = 0;
+
+							FD_ZERO(&readfd);
+							FD_SET(sockfd_new, &readfd);
+							FD_SET(sockfd ,&readfd);
+							
+							tv.tv_sec = TIME_OUT_DEFAULT;
+							tv.tv_usec = 0;
+
+							if( ( nRet = select(sockfd+1, &readfd, NULL, NULL, &tv) ) < 0 )
 							{
-								continue;
-							}
-							SERVER_DEBUG( "select error:%s\n", strerror(errno) );
-							return -1;			
-						} else if( FD_ISSET(sockfd, &readfd) ) {
-							SERVER_DEBUG( "receive upstream message:\n" );
-							if( ( length = read_wrapper(sockfd, buffer, sizeof(buffer)) ) < 0 )
-							{
-								SERVER_DEBUG( "read error:%s\n", strerror(errno) );
-								return -1;			
-							}
-							SERVER_DEBUG( "read size = %d \n", length );
-							if( length > 0 )
-							{
-								SERVER_DEBUG( "send message to downsteam:\n" );
-								if( ( length = write_wrapper( sockfd_new, buffer, length ) ) == -1 )
+								if( EINTR == errno )
 								{
-									SERVER_DEBUG( "write error:%s\n", strerror(errno) );
-									close( sockfd_new );		
+									continue;
+								}
+								SERVER_DEBUG( "select error:%s\n", strerror(errno) );
+								return -1;			
+							} else if( FD_ISSET(sockfd, &readfd) ) {
+								SERVER_DEBUG( "receive upstream message:\n" );							
+								if( dada_exchange( sockfd_new, sockfd, buffer, sizeof(buffer) ) < 0)
+								{
+									SERVER_DEBUG( "dada_exchange error\n" );
+									close( sockfd );
 									return -1;			
 								}
-								SERVER_DEBUG( "write size = %d\n", length );		   
-							} else {
-								SERVER_DEBUG( "receive upstream message error, close socket\n" );	
-								close( sockfd );		
-								break;
-							}
-						} else {						
-							close( sockfd );
-							break;
-						}
-					}
-				}
-			} else {
-				SERVER_DEBUG( "receive downstream message error, close socket\n" );	
-				close( sockfd );		
+							} else if( FD_ISSET(sockfd_new, &readfd) ) {
+								SERVER_DEBUG( "receive downstream message:\n" );
+								if( dada_exchange( sockfd, sockfd_new, buffer, sizeof(buffer) ) < 0)
+								{
+									SERVER_DEBUG( "dada_exchange error\n" );
+									close( sockfd );
+									return -1;			
+								}
+							} else {						
+								SERVER_DEBUG( "receive upstream message timeout\n" );	
+								continue;
+							} //select timeout
+						} //while(1)
+					} //connect
+				} //parse_http_data
+			} else { //read_wrapper <= 0 
+				SERVER_DEBUG( "receive downstream message error, client socket closed\n" );	
 				return -1;
 			}
-		} else {
-			continue;
+		} else { //select timeout
+			SERVER_DEBUG( "receive downstream message timeout\n" );	
 		}
 	}
 
@@ -257,21 +258,21 @@ process_http_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen
 }
 
 
-size_t
+ssize_t
 read_wrapper( int fd, char *buf, size_t count )
 {
 	assert( NULL != buf );
+	memset( buf, 0, count );
 
-	size_t c = 0;
+	ssize_t c = 0;
 	while(1)
 	{
-		size_t length = read( fd, buf+c, count-c );
-		SERVER_DEBUG( "read length:%d\n", length );
-		if( -1 == length )
+		ssize_t length = read( fd, buf+c, count-c );
+		if( 0 > length )
 		{
+			SERVER_DEBUG( "read: errno:%d error:%s \n", errno, strerror(errno) );
 			if( EINTR == errno )
 			{
-				SERVER_DEBUG( "ignore EINTR\n" );
 				continue;
 			}
 			break;
@@ -285,29 +286,69 @@ read_wrapper( int fd, char *buf, size_t count )
 }
 
 
-size_t
+ssize_t
 write_wrapper( int fd, const char *buf, size_t count )
 {
 	assert( NULL != buf );
 
-	size_t c = 0;
+	ssize_t c = 0;
 	while(1)
 	{
-		size_t length = write( fd, buf+c, count-c );
+		ssize_t length = write( fd, buf+c, count-c );
 		if( 0 > length )
 		{
-			if( EINTR == errno )
+			SERVER_DEBUG( "write: errno:%d error:%s\n", errno, strerror(errno) );
+			if( EINTR == errno || EAGAIN == errno )
 			{
 				continue;
 			}
-			break;
-		} else if( 0 < length ){
+			return length;
+		} else {
 			c += length;
+			if( c == count )
+			{
+				break;
+			}
+		}
+	}
+	return c;
+}
+
+
+int 
+dada_exchange( int sockfd_dest, int sockfd_src, char* buf, size_t count )
+{
+	int total = 0;
+	while(1)
+	{
+		ssize_t length = 0;
+		SERVER_DEBUG( "read message from src:\n" );
+		if( ( length = read_wrapper( sockfd_src, buf, count ) ) < 0 )
+		{
+			SERVER_DEBUG( "read error:%s\n", strerror(errno) );
+			return -1;			
+		}
+		SERVER_DEBUG( "read size = %d \n", length );
+		total += length;
+		if( 0 == total && 0 == length )
+		{
+			SERVER_DEBUG( "receive src message error, close socket\n" );	
+			return -1;			
+		} 
+		if( length > 0 )
+		{
+			SERVER_DEBUG( "send message to dest:\n" );
+			if( ( length = write_wrapper( sockfd_dest, buf, length ) ) == -1 )
+			{
+				SERVER_DEBUG( "write error:%s\n", strerror(errno) );
+				return -1;			
+			}
+			SERVER_DEBUG( "write size = %d\n", length );		   
 		} else {
 			break;
 		}
 	}
-	return c;
+	return 0;
 }
 
 int 
@@ -319,7 +360,7 @@ setsockopt_wrapper( int sockfd )
 		SERVER_DEBUG( "setsockopt SO_REUSEADDR error:%s\n", strerror(errno) );
 		return -1;			
 	}
-	SERVER_DEBUG( "setsockopt SO_REUSEADDR success\n" );	
+	SERVER_DEBUG( "setsockopt SO_REUSEADDR successfully\n" );	
 
 	int sndbuf = SO_SEND_BUF_MAX;
 	if( setsockopt( sockfd, SOL_SOCKET, SO_SNDBUF, (const void *)&sndbuf, (socklen_t)sizeof(int) ) < 0 )
@@ -327,7 +368,7 @@ setsockopt_wrapper( int sockfd )
 		SERVER_DEBUG( "setsockopt SO_SNDBUF error:%s\n", strerror(errno) );
 		return -1;			
 	}
-	SERVER_DEBUG( "setsockopt SO_SNDBUF success\n" );	
+	SERVER_DEBUG( "setsockopt SO_SNDBUF successfully\n" );	
 
 	int rcvbuf = SO_RECV_BUF_MAX;
 	if( setsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, (const void *)&rcvbuf, (socklen_t)sizeof(int) ) < 0 )
@@ -335,7 +376,7 @@ setsockopt_wrapper( int sockfd )
 		SERVER_DEBUG( "setsockopt SO_RCVBUF error:%s\n", strerror(errno) );
 		return -1;			
 	}
-	SERVER_DEBUG( "setsockopt SO_RCVBUF success\n" );	
+	SERVER_DEBUG( "setsockopt SO_RCVBUF successfully\n" );	
 
 	return 0;
 }
@@ -346,6 +387,7 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 {
 	assert( NULL != http_data );
 	assert( NULL != host_ip );
+	memset( host_ip, 0, host_ip_len );
 
 	SERVER_DEBUG( "#########dump http###########\n" );
 	SERVER_DEBUG( "\n%s", http_data );
@@ -386,7 +428,7 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 				}
 				strncpy( host, p, sizeof(host) );
 				size_t len = strlen(host);
-				SERVER_DEBUG( "len = %d\n", len )
+				SERVER_DEBUG( "len = %d\n", len );
 				while( len > 1 && '\r' == host[len-1] || '\n' == host[len-1] )
 				{
 					host[len-1] = '\0';
@@ -402,6 +444,11 @@ parse_http_data( const char* http_data, size_t http_data_len, char *host_ip, siz
 		SERVER_DEBUG( "index = %d\n", index );
 	}while( index<http_data_len );
 
+	if( 0 == strlen(host) )
+	{
+		SERVER_DEBUG( "lookup host error\n" );	
+		return -1;
+	}
 	SERVER_DEBUG( "host = %s\n", host );
 	struct hostent *ht = gethostbyname( host );
 	if( NULL == ht )
@@ -442,20 +489,20 @@ const char* get_time_string( void )
 int 
 server( int listen_port, const char* host_ip, int host_port )
 {
-	#if !defined(HTTP_PROXY)
+	#if !defined(HTTP_PROXY) && !defined(SERVER)
 	assert( NULL != host_ip );
 	#endif
+
 	struct sockaddr_in server_addr;	
 	memset( &server_addr, 0, sizeof(server_addr) );
 	
 	int sockfd = 0;
-	
 	if( (sockfd=socket(AF_INET,SOCK_STREAM,0) ) == -1 )
 	{
 		SERVER_DEBUG( "server socket error:%s\n", strerror(errno) );
 		return -1;
 	}
-	SERVER_DEBUG( "server socket success\n" );	
+	SERVER_DEBUG( "server socket successfully\n" );	
 
 	if( setsockopt_wrapper( sockfd ) < 0 )
 	{
@@ -470,11 +517,11 @@ server( int listen_port, const char* host_ip, int host_port )
 
 	if( bind( sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr) ) == - 1 )
 	{
-		SERVER_DEBUG( "bind error:%s\n", strerror(errno) );
+		SERVER_DEBUG( "server bind error:%s\n", strerror(errno) );
 		close( sockfd );
 		return -1;			
 	}
-	SERVER_DEBUG( "server bind success\n" );	
+	SERVER_DEBUG( "server bind successfully\n" );	
 
 	if( listen( sockfd, BACK_LOG_DEFAULT ) == -1 )
 	{
@@ -482,40 +529,37 @@ server( int listen_port, const char* host_ip, int host_port )
 		close( sockfd );
 		return -1;			
 	}		
-	SERVER_DEBUG( "server listen success port = %d\n", listen_port );	
+	SERVER_DEBUG( "server listen successfully port = %d\n", listen_port );	
 	
 	parent = getpid();
-	int status;
 
-	SERVER_DEBUG( "server bind success\n" );	
 	while(1) 
 	{
-		int sockfd_new = 0;
-		
 		struct sockaddr_in client_addr;		
 		memset( &client_addr, 0, sizeof(client_addr) );
-		socklen_t clientsize = sizeof( client_addr );
-	
-		sockfd_new = accept( sockfd, (struct sockaddr *)&client_addr, &clientsize );
+		socklen_t clientsize = sizeof(struct sockaddr);
 
-		if( sockfd_new < 0 && errno == EINTR )
+		int sockfd_new = accept( sockfd, (struct sockaddr *)&client_addr, &clientsize );
+		if( sockfd_new < 0 && EINTR == errno )
 		{
 			SERVER_DEBUG( "catch signal:%s\n", strerror(errno) );
 			continue;				
 		} else if( sockfd_new < 0  ) {
 			SERVER_DEBUG( "accept error:%s\n", strerror(errno) );
 			return -1;			
-		}			
-		SERVER_DEBUG( "sockfd_new:%d\n", sockfd_new );
-
-		if( fcntl( sockfd_new, F_SETFL, O_NONBLOCK) < 0 )
-		{
-			SERVER_DEBUG( "fcntl error:%s\n", strerror(errno) );
-			close( sockfd_new );	
-			close( sockfd );
-			return -1;				
 		}
 
+		int flag = 0;
+		if( flag = fcntl( sockfd_new, F_GETFL,0 ) != -1 )
+		{
+			if( fcntl( sockfd_new, F_SETFL, flag|O_NONBLOCK ) < 0 )
+			{
+				SERVER_DEBUG( "fcntl error:%s\n", strerror(errno) );
+				return -1;				
+			}
+			SERVER_DEBUG( "fcntl O_NONBLOCK successfully\n" );	
+		}
+		
 		pid_t child = fork();
 
 		if( child < 0 )
@@ -527,49 +571,38 @@ server( int listen_port, const char* host_ip, int host_port )
 		}else if( child == 0 ){
 			SERVER_DEBUG( "child process\n" );
 			close( sockfd );
-			//pid_t pid = fork();
-			pid_t pid = 0;
-			if( pid < 0 )
+			#if defined(PROXY)
+			if( process_proxy( sockfd_new, &client_addr, &clientsize, host_ip, host_port ) < 0 )
 			{
-				SERVER_DEBUG( "fork error:%s\n", strerror(errno) );
+				SERVER_DEBUG( "process_proxy error:%s\n", strerror(errno) );
 				close( sockfd_new );	
-				close( sockfd );
 				return -1;
-			} else if( pid == 0 ){
-				#if defined(PROXY)
-				if( process_proxy( sockfd_new, &client_addr, &clientsize, host_ip, host_port ) < 0 )
-				{
-					SERVER_DEBUG( "process_proxy error:%s\n", strerror(errno) );
-					close( sockfd_new );	
-					return -1;
-				}		
-				#elif defined(HTTP_PROXY)
-				if( process_http_proxy( sockfd_new, &client_addr, &clientsize ) < 0 )
-				{
-					SERVER_DEBUG( "process_http_proxy error:%s\n", strerror(errno) );
-					close( sockfd_new );	
-					return -1;
-				}		
-				#elif defined(SERVER)
-				if( process_server( sockfd_new, &client_addr, &clientsize ) < 0 )
-				{
-					SERVER_DEBUG( "process_server error:%s\n", strerror(errno) );
-					close( sockfd_new );	
-					return -1;
-				}		
-				#endif
-			} else {
-				return 0;
-			}
+			}		
+			#elif defined(HTTP_PROXY)
+			if( process_http_proxy( sockfd_new, &client_addr, &clientsize ) < 0 )
+			{
+				SERVER_DEBUG( "process_http_proxy error\n" );
+				close( sockfd_new );	
+				return -1;
+			}		
+			#elif defined(SERVER)
+			if( process_server( sockfd_new, &client_addr, &clientsize ) < 0 )
+			{
+				SERVER_DEBUG( "process_server error:%s\n", strerror(errno) );
+				close( sockfd_new );	
+				return -1;
+			}		
+			#endif
 		} else {
+			int status;
 			SERVER_DEBUG( "waitpid\n" );
 			close( sockfd_new );	
-			//waitpid( child, &status, 0 );
-			//waitpid( 0, &status, WNOHANG );
+			waitpid( -1, &status, WNOHANG );
 		}
 	}
 	
 	close( sockfd );
+	SERVER_DEBUG( "server close\n" );
 	
 	return 0;	
 }
@@ -602,11 +635,10 @@ process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 
 		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
-		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
 	
 		int nRet = 0;
 
-		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv) ) < 0 )
 		{
 			if( EINTR == errno )
 			{
@@ -616,23 +648,19 @@ process_server( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen )
 			return -1;			
 		} else if( FD_ISSET(sockfd_new, &readfd) ) {
 			SERVER_DEBUG( "receive message:\n" );
-			if( ( length = read(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
+			if( ( length = read_wrapper(sockfd_new, buffer, sizeof(buffer)) ) < 0 )
 			{
 				SERVER_DEBUG( "read error:%s\n", strerror(errno) );
 				return -1;			
 			}
-			buffer[length] = '\0';
+		
 			SERVER_DEBUG( "read size = %d\n", length );
-			for( int i = 0; i<length; i++ )
-			{
-				SERVER_DEBUG( "buffer[%d] = %x\n", i, buffer[i] );
-			}
-			if( 1 )
+		
+			if( 0 < length )
 			{
 				SERVER_DEBUG( "send message:\n" );
-				char message[] = "world\n";
-				length = 0;
-				if( ( length = write( sockfd_new, message, strlen(message) ) ) == -1 )
+				const char* message = get_time_string();
+				if( ( length = write_wrapper( sockfd_new, message, strlen(message) ) ) < 0 )
 				{
 					SERVER_DEBUG( "write error:%s\n", strerror(errno) );
 					return -1;			
@@ -675,7 +703,7 @@ process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, con
 		SERVER_DEBUG( "socket error:%s\n", strerror(errno) );
 		return -1;
 	}
-	SERVER_DEBUG( "client socket success\n" );	
+	SERVER_DEBUG( "client socket successfully\n" );	
 
 	client_addr.sin_family = AF_INET;
 	//client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -689,7 +717,7 @@ process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, con
 		close( sockfd );
 		return -1;			
 	}
-	SERVER_DEBUG( "connect success\n" );	
+	SERVER_DEBUG( "connect successfully\n" );	
 
 	char buffer[SO_BUF_LEN_MAX];
 	size_t length = 0;
@@ -705,11 +733,10 @@ process_proxy( int sockfd_new, struct sockaddr_in *addr, socklen_t *addrlen, con
 
 		tv.tv_sec = TIME_OUT_DEFAULT;
 		tv.tv_usec = 0;
-		int timeout = (tv.tv_sec*1000000+tv.tv_usec)/1000000;
 	
 		int nRet = 0;
 
-		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv ) ) < 0 )
+		if( ( nRet = select(sockfd_new+1, &readfd, NULL, NULL, &tv) ) < 0 )
 		{
 			if( EINTR == errno )
 			{
@@ -792,24 +819,25 @@ main( int argc, char **argv )
 {
 	signal(SIGCHLD, SigUserProc);
 
-	int port = 0;
-	char *host_ip = NULL;
-	int host_port = 0;
-	char c = 0;
-
 	#if defined(PROXY)
 	if( argc < 7 )
-	#elif defined(HTTP_PROXY)
+	#elif defined(HTTP_PROXY)||defined(SERVER)
 	if( argc < 2 )
 	#endif
 	{
 		#if defined(PROXY)
 		SERVER_DEBUG( "usage:./server -l 12306 -s 127.0.0.1 -p 12307\n" );
-		#elif defined(HTTP_PROXY)
+		#elif defined(HTTP_PROXY)||defined(SERVER)
 		SERVER_DEBUG( "usage:./server -l 12306 \n" );
 		#endif
 		return -1;
 	}
+
+	int port = 0;
+	char *host_ip = NULL;
+	int host_port = 0;
+	char c = 0;
+
 	while( (c = getopt( argc, argv, "l:s:p:" )) > 0 )
 	{
 		switch( c )
@@ -824,16 +852,22 @@ main( int argc, char **argv )
 				host_port = atoi( optarg );
 				break;
 			default:
+				#if defined(PROXY)
 				SERVER_DEBUG( "usage:./server -l 12306 -s 127.0.0.1 -p 12307\n" );
+				#elif defined(HTTP_PROXY)||defined(SERVER)
+				SERVER_DEBUG( "usage:./server -l 12306 \n" );
+				#endif
 				return -1;
 		}
 	}
 
-	SERVER_DEBUG( "listen_port:%d\nhost_ip:%s\nhost_port:%d\n", port, host_ip, host_port );
+	#if defined(PROXY)
+	SERVER_DEBUG( "listen_port:%d host_ip:%s host_port:%d\n", port, host_ip, host_port );
+	#elif defined(HTTP_PROXY)||defined(SERVER)
+	SERVER_DEBUG( "listen_port:%d\n", port );
+	#endif
 
-	server( port, host_ip, host_port );
-	
-	SERVER_DEBUG( "server close\n" );
+	(void)server( port, host_ip, host_port );
 
 	return 0;
 }
