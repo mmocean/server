@@ -5,11 +5,15 @@
 	> Created Time: Fri 20 Jun 2014 03:50:23 PM CST
  ************************************************************************/
 
-#ifdef _LOG_H
+#ifndef _LOG_H
 #define _LOG_H
 
+const char* 
+get_time_string( void );
 
-
+#define SERVER_DEBUG(...)\
+printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
+printf( __VA_ARGS__ );\
 
 #endif
 
