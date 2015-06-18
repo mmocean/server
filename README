@@ -1,0 +1,65 @@
+http_proxy demo
+===============
+
+1.Overview
+--------
+This program is designed to show how a proxy works under HTTP(Hyper Text Transport Protocol), now it supports multi-process and multi-thread.
+
+It is written in C, but my development paltform is Liunx(Ubuntu 10.04.4 LTS), I can not ensure it works in other paltforms(e.g. Unix, Hpux) as was expected.
+
+Since this is only a demo, if you get these source files, build, run this program, and find out some bugs to report,mail to:lihaiyangcsu@gmail.com. You are really welcome! ^_^
+
+
+2.How to get a cpoy of source code?
+--------------------------------
+git clone https://github.com/mmocean/server
+
+
+3.How to build this program?
+-------------------------
+Suppose your program directory is ${server}, to bulid it, type commands in this order:
+
+command line> aclocal
+command line> autoheader
+command line> autoconf
+command line> automake -a
+command line> ./configure
+command line> make
+
+Now you should succeed, but no arguments [./configure] does not make sense, we should sepcify one of arguments below:
+--enable-MULTI_PTHREAD=yes MULTI_PROCESS is default
+--enable-SERVER=yes as a tcp server
+--enable-PROXY=yes as a normal proxy server
+--enable-HTTP_PROXY=yes as a http_proxy server
+
+e.g.
+command line> ./configure --enable-SERVER=yes
+
+build to be a simple normal tcp server.
+
+you can use [./configure --help] to view more options.
+
+4.How to launch this program?
+----------------------------
+4.1 normal tcp server && http proxy
+command line> ./server -l 8087
+
+4.2 normal proxy 
+command line> ./server -l 8087 -s 127.0.0.1 -p 8088
+
+5.Possible improvement 
+----------------------
+	support pselect/poll
+	support epoll(Linux)
+	cache static data 
+
+6.Notice
+--------
+This proram is under "GNU GENERAL PUBLIC LICENSE Version 3".
+
+=====================================================
+For more details, or help, or bug report, contact me!
+
+Wish you'll enjoy my program.
+=====================================================
+
