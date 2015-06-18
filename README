@@ -19,6 +19,7 @@ git clone https://github.com/mmocean/server
 -------------------------
 Suppose your program directory is ${server}, to bulid it, type commands in this order:
 
+command line> cd ${server}
 command line> aclocal
 command line> autoheader
 command line> autoconf
