@@ -8,8 +8,6 @@
 #ifndef _SOCKET_H
 #define _SOCKET_H
 
-#include"defs.h"  
-
 int 
 initial_socket( void );
 
@@ -32,3 +30,4 @@ int
 parse_http_data( const char* http_data, int http_data_len, char *host_ip, int host_ip_len );
 
 #endif
+

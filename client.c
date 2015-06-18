@@ -1,12 +1,15 @@
 /*************************************************************************
-	> File Name: client.h
+	> File Name: client.c
 	> Author: lihy
 	> Mail: lihaiyangcsu@gmail.com 
-	> Created Time: Sun 14 Jun 2015 09:01:06 PM CST
+	> Created Time: Thu 19 Jun 2014 09:49:23 PM CST
  ************************************************************************/
 
-#ifndef _CLIENT_H
-#define _CLIENT_H
+#include"defs.h"  
+#include"client.h"
 
-#endif
-
+int main( int argc, char **argv )
+{
+	printf( "client\n" );
+	return 0;
+}

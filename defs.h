@@ -25,13 +25,11 @@
 #include<getopt.h>
 #include<netdb.h>
 
-//#define MULTI_PROCESS
-#define MULTI_PTHREAD
 
-#define HTTP_PROXY
-//#define SERVER
+#ifdef HAVE_CONFIG_H
+#include"config.h"
+#endif
 
-#define SIG_USER 14
 
 #define HOST_IP_LEN_MAX 16
 #define HOST_PORT_DEFAULT 80
@@ -48,8 +46,8 @@
 #define SO_RECV_BUF_MAX 8192
 
 extern int errno;
+
 extern int h_errno;
 
 #endif
-
 

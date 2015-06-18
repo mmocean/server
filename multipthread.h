@@ -14,6 +14,7 @@ struct pthread_vargs
 {
 	//in - parameter
 	int sockfd;
+	int sockfd_rem; //remote
 	//out - result
 	int ret_code;
 	pthread_t pid;
@@ -23,15 +24,23 @@ struct pthread_vargs
 	long write_to_upstream;	
 	time_t start_time;
 	time_t stop_time;
+	struct pthread_vargs *next;
 };
+
+void* 
+pthread_http_proxy( void *args );
 
 void 
 pthread_exit_wrapper( int ret_code, struct pthread_vargs *pv );
 
-void 
-display_pthread_vargs( struct pthread_vargs *pv );
+int
+pthread_join_wrapper( const struct pthread_vargs *pv );
 
-void* 
-process_http_proxy( void *args );
+void 
+pthread_vargs_display( const struct pthread_vargs *pv );
+
+void
+pthread_vargs_cleanup( const struct pthread_vargs *pv );
 
 #endif
+

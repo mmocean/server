@@ -8,8 +8,13 @@
 #ifndef _SERVER_H
 #define _SERVER_H
 
+typedef void (*sighandler_t)(int);    
+
+sighandler_t 
+signal_intr( int no, sighandler_t func );
+
 void 
-SigUserProc(int no);
+SigUserProc( int no );
 
 int 
 process_server( int sockfd_new );

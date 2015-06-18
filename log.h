@@ -15,5 +15,8 @@ get_time_string( void );
 printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
 printf( __VA_ARGS__ );\
 
+int 
+log_printf( void );
+
 #endif
 

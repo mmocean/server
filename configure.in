@@ -1,0 +1,53 @@
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
+
+AC_PREREQ([2.65])
+AC_INIT([http_proxy], [1.0], [lihaiyangcsu@gmail.com])
+#AC_CONFIG_SRCDIR([socket.h])
+AC_CONFIG_HEADERS([config.h])
+AM_INIT_AUTOMAKE([http_proxy], [1.0])
+
+# Checks for programs.
+AC_PROG_CC
+
+# Checks for libraries.
+#AC_CHECK_LIB([pthread], [main])
+
+# Checks for header files.
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h netdb.h netinet/in.h stdlib.h string.h sys/socket.h unistd.h])
+
+# Checks for typedefs, structures, and compiler characteristics.
+AC_TYPE_PID_T
+AC_TYPE_SIZE_T
+AC_TYPE_SSIZE_T
+
+# Checks for library functions.
+AC_FUNC_FORK
+AC_FUNC_MALLOC
+AC_CHECK_FUNCS([gethostbyname inet_ntoa memset select socket strerror strncasecmp])
+
+#AC_CONFIG_FILES([Makefile])
+
+
+AC_ARG_ENABLE([MULTI_PTHREAD], [  --enable-MULTI_PTHREAD=yes MULTI_PROCESS is default],[],[enable_MULTI_PTHREAD=no])
+if test "$enable_MULTI_PTHREAD" = yes ; then
+	AC_DEFINE([MULTI_PTHREAD],[],[Define if --enable-MULTI_PTHREAD,])
+fi
+
+AC_ARG_ENABLE([SERVER], [  --enable-SERVER=yes as a tcp server],[],[enable_SERVER=no])
+if test "$enable_SERVER" = yes ; then
+	AC_DEFINE([SERVER],[],[Define if --enable-SERVER,])
+fi
+
+AC_ARG_ENABLE([PROXY], [  --enable-PROXY=yes as a normal proxy server],[],[enable_PROXY=no])
+if test "$enable_PROXY" = yes ; then
+	AC_DEFINE([PROXY],[],[Define if --enable-PROXY,])
+fi
+
+AC_ARG_ENABLE([HTTP_PROXY], [  --enable-HTTP_PROXY=yes as a http_proxy server],[],[enable_HTTP_PROXY=no])
+if test "$enable_HTTP_PROXY" = yes ; then
+	AC_DEFINE([HTTP_PROXY],[],[Define if --enable-HTTP_PROXY,])
+fi
+
+
+AC_OUTPUT([Makefile])
