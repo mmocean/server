@@ -49,5 +49,10 @@ if test "$enable_HTTP_PROXY" = yes ; then
 	AC_DEFINE([HTTP_PROXY],[],[Define if --enable-HTTP_PROXY,])
 fi
 
+AC_ARG_ENABLE([EPOLL], [  --enable-EPOLL=yes use epoll in Linux],[],[enable_EPOLL=no])
+if test "$enable_EPOLL" = yes ; then
+	AC_DEFINE([EPOLL],[],[Define if --enable-EPOLL,])
+fi
+
 
 AC_OUTPUT([Makefile])

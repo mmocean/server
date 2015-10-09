@@ -51,8 +51,8 @@ command line> ./server -l 8087 -s 127.0.0.1 -p 8088
 5.Possible improvement 
 ----------------------
 	support pselect/poll
-	support epoll(Linux)
 	cache static data 
+	epoll(Linux)(supported)
 
 6.Notice
 --------

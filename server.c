@@ -10,6 +10,7 @@
 #include"log.h"
 #include"multiprocess.h" 
 #include"socket.h"
+#include <sys/epoll.h>
 
 #if defined(MULTI_PTHREAD)
 #include"multipthread.h"
@@ -226,6 +227,152 @@ process_proxy( int sockfd_new, const char* host_ip, int host_port )
 }
 
 
+int handle_new_connection( int sockfd )
+{
+	SERVER_DEBUG( "handle_new_connection\n" );
+	while( 1 )
+	{
+		struct sockaddr_in client_addr;		
+		memset( &client_addr, 0, sizeof(client_addr) );
+		socklen_t clientsize = sizeof(struct sockaddr);
+
+		int sockfd_new = accept( sockfd, (struct sockaddr *)&client_addr, &clientsize );
+		if( sockfd_new < 0 && EINTR == errno )
+		{
+			SERVER_DEBUG( "catch signal from blocking system call [accept]:%s\n", strerror(errno) );
+			continue;
+		} else if( sockfd_new < 0  ) {
+			SERVER_DEBUG( "accept error:%s\n", strerror(errno) );
+			return -1;
+		}
+
+		if( setsockopt_nonblock( sockfd_new ) < 0 )
+		{
+			SERVER_DEBUG( "setsockopt_nonblock error\n" );
+			close( sockfd_new );		
+			return -1;
+		}
+
+		if( getpeername( sockfd_new, (struct sockaddr *)&client_addr, &clientsize ) == -1 )
+		{
+			SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
+			close( sockfd_new );	
+			return -1;
+		}
+
+		SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(client_addr.sin_addr), client_addr.sin_port );
+
+		return sockfd_new;
+	}
+
+	return -1;
+}
+
+
+int epoll_server( int sockfd )
+{
+	#define EVENTS_MAX 100
+	int epfd = epoll_create( EVENTS_MAX );
+	if( epfd < 0 )
+	{
+		SERVER_DEBUG( "epoll_create error:%s\n", strerror( errno ) );	
+		return -1;
+	}
+
+	struct epoll_event epollev;
+	epollev.events = EPOLLIN;
+	epollev.data.fd = sockfd;
+	if( epoll_ctl( epfd, EPOLL_CTL_ADD, sockfd, &epollev) < 0 )
+	{
+		SERVER_DEBUG( "epoll_ctl error:%s\n", strerror( errno ) );	
+		close( epfd );
+		return -1;
+	}
+	
+	struct epoll_event events[EVENTS_MAX];
+	while( 1 )
+	{
+		#define TIME_OUT 5000
+		int ret = epoll_wait( epfd, events, EVENTS_MAX, TIME_OUT );
+		SERVER_DEBUG( "epoll_wait ret:%d\n", ret );
+		if( ret < 0 )
+		{
+			SERVER_DEBUG( "epoll_wait error:%s\n", strerror( errno ) );	
+			close( epfd );
+			//handle other fdes
+			return -1;
+		} else if( 0 == ret ) {
+			SERVER_DEBUG( "TIME_OUT,listenning...\n" );
+			continue;
+		} else {
+			int i = 0;
+			for( i = 0; i < ret; ++i )
+			{
+				if( events[i].data.fd == sockfd )
+				{
+					//accept new connection	
+					int sockfd_new = handle_new_connection( sockfd );
+					if( sockfd_new < 0 )
+					{
+						SERVER_DEBUG( "handle_new_connection error\n" );
+						return -1;
+					}
+					
+					//epollev.events = EPOLLIN|EPOLLOUT|EPOLLET;
+					epollev.events = EPOLLIN|EPOLLET;
+					epollev.data.fd = sockfd_new;
+					if( epoll_ctl( epfd, EPOLL_CTL_ADD, sockfd_new, &epollev) < 0 )
+					{
+						SERVER_DEBUG( "epoll_ctl error:%s\n", strerror( errno ) );	
+						close( epfd );
+						return -1;
+					}
+				} else {
+					//read-write
+					int sockfd = events[i].data.fd;
+
+					char buffer[SO_BUF_LEN_MAX];
+					memset( buffer, 0, sizeof(buffer) );
+
+					SERVER_DEBUG( "receive message:\n" );
+
+					ssize_t length = 0;
+					if( ( length = read_wrapper(sockfd, buffer, sizeof(buffer)) ) < 0 )
+					{
+						SERVER_DEBUG( "read error:%s\n", strerror(errno) );
+						return -1;			
+					}
+
+					SERVER_DEBUG( "read size = %d\n", length );
+					if( 0 == length )
+					{
+						SERVER_DEBUG( "closing socket\n" );
+						epollev.data.fd = sockfd;
+						if( epoll_ctl( epfd, EPOLL_CTL_DEL, sockfd, &epollev) < 0 )
+						{
+							SERVER_DEBUG( "epoll_ctl error:%s\n", strerror( errno ) );	
+							close( epfd );
+							return -1;
+						}
+					} else {
+						SERVER_DEBUG( "buffer:%s\n", buffer );		
+						const char* message = get_time_string();
+						SERVER_DEBUG( "send message:%s\n", message );
+						if( ( length = write_wrapper( sockfd, message, strlen(message) ) ) < 0 )
+						{
+							SERVER_DEBUG( "write error:%s\n", strerror(errno) );
+							return -1;			
+						}
+						SERVER_DEBUG( "write size = %d\n", length );
+					}
+				}	
+			}	
+		}
+	}
+
+	return 0;
+}
+
 
 int 
 server( int listen_port, const char* host_ip, int host_port )
@@ -270,7 +417,11 @@ server( int listen_port, const char* host_ip, int host_port )
 		return -1;			
 	}		
 	SERVER_DEBUG( "server listen successfully port = %d\n", listen_port );	
-	
+
+	#if defined(EPOLL)
+	return epoll_server( sockfd );
+	#endif
+
 	parent = getpid();
 	
 	struct pthread_vargs *list = NULL;
@@ -281,35 +432,13 @@ server( int listen_port, const char* host_ip, int host_port )
 		{
 			break;
 		}
-		struct sockaddr_in client_addr;		
-		memset( &client_addr, 0, sizeof(client_addr) );
-		socklen_t clientsize = sizeof(struct sockaddr);
-
-		int sockfd_new = accept( sockfd, (struct sockaddr *)&client_addr, &clientsize );
-		if( sockfd_new < 0 && EINTR == errno )
+	
+		int sockfd_new = handle_new_connection( sockfd );
+		if( sockfd_new < 0 )
 		{
-			SERVER_DEBUG( "catch signal from blocking system call [accept]:%s\n", strerror(errno) );
-			continue;
-		} else if( sockfd_new < 0  ) {
-			SERVER_DEBUG( "accept error:%s\n", strerror(errno) );
-			close( sockfd_new );	
+			SERVER_DEBUG( "handle_new_connection\n" );
 			break;
 		}
-
-		if( setsockopt_nonblock( sockfd_new ) < 0 )
-		{
-			SERVER_DEBUG( "setsockopt_nonblock error\n" );
-			close( sockfd_new );		
-			break;
-		}
-
-		if( getpeername( sockfd_new, (struct sockaddr *)&client_addr, &clientsize ) == -1 )
-		{
-			SERVER_DEBUG( "getpeername error:%s\n", strerror(errno) );
-			close( sockfd_new );	
-			break;
-		}
-		SERVER_DEBUG( "socket established, peer addr = %s:%u\n", inet_ntoa(client_addr.sin_addr), client_addr.sin_port );
 
 		#if !defined(MULTI_PTHREAD)
 		pid_t child = fork();
