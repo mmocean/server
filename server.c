@@ -290,6 +290,7 @@ int epoll_server( int sockfd )
 	}
 	
 	struct epoll_event events[EVENTS_MAX];
+	int connection = 0;
 	while( 1 )
 	{
 		#define TIME_OUT 5000
@@ -327,6 +328,8 @@ int epoll_server( int sockfd )
 						close( epfd );
 						return -1;
 					}
+						
+					SERVER_DEBUG( "total connections:%d\n", ++connection );
 				} else {
 					//read-write
 					int sockfd = events[i].data.fd;
@@ -354,6 +357,7 @@ int epoll_server( int sockfd )
 							close( epfd );
 							return -1;
 						}
+						close( sockfd );
 					} else {
 						SERVER_DEBUG( "buffer:%s\n", buffer );		
 						const char* message = get_time_string();
