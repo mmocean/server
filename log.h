@@ -12,9 +12,12 @@ const char*
 get_time_string( void );
 
 #define SERVER_DEBUG(...)\
-printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
-printf( __VA_ARGS__ );\
+do {\
+	printf("[DEBUG] [%s] [%d] [%s:%d] ", get_time_string(), getpid(), __FILE__, __LINE__ );\
+	printf( __VA_ARGS__ );\
+} while(0)
 
+	
 int 
 log_printf( void );
 
