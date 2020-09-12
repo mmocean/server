@@ -7,7 +7,7 @@ This program is designed to show how a proxy works under HTTP(Hyper Text Transpo
 
 It is written in C, but my development paltform is Liunx(Ubuntu 10.04.4 LTS), I can not ensure it works in other paltforms(e.g. Unix, Hpux) as was expected.
 
-Since this is only a demo, if you get these source files, build, run this program, and find out some bugs to report,mail to:lihaiyangcsu@gmail.com. You are really welcome! ^_^
+Since this is only a demo, if you get these source files, build, run this program, and find out some bugs to report. You are really welcome! ^_^
 
 
 2.How to get a cpoy of source code?
